@@ -8,12 +8,19 @@
     <!-- Column 1 — Recent Campaigns -->
     <div>
         <div class="card">
-            <div class="card-header">
-                <i class="fas fa-satellite-dish"></i>
-                Últimas Prospecções
+            <div class="card-header" style="justify-content: space-between; display: flex;">
+                <div>
+                    <i class="fas fa-satellite-dish"></i>
+                    Últimas Prospecções
+                </div>
+                <button id="toggleCampanhasBtn"
+                    style="background: none; border: none; color: var(--text-muted); cursor: pointer; transition: transform 0.3s ease;">
+                    <i class="fas fa-chevron-down"></i>
+                </button>
             </div>
             <div class="card-body">
-                <div id="campanhas-container">
+                <div id="campanhas-container"
+                    style="height: 300px; max-height: 300px; overflow-y: hidden; transition: max-height 0.4s ease, height 0.4s ease;">
                     <p class="no-campaigns"><span class="spinner"></span> Carregando histórico...</p>
                 </div>
             </div>
@@ -33,7 +40,7 @@
                 Leads Atingidos nos Últimos 5 Dias
             </div>
             <div class="card-body">
-                <div class="chart-container">
+                <div class="chart-container" style="height: 300px;">
                     <canvas id="graficoLeadsPorData"></canvas>
                 </div>
             </div>
@@ -197,4 +204,30 @@
 
     setInterval(atualizarGrafico, 5000);
     atualizarGrafico();
+
+    // ---- Toggle Campaigns Expand ----
+    const toggleBtn = document.getElementById('toggleCampanhasBtn');
+    const campanhasContainer = document.getElementById('campanhas-container');
+    let isCampanhasExpanded = false;
+
+    if (toggleBtn && campanhasContainer) {
+        toggleBtn.addEventListener('click', () => {
+            isCampanhasExpanded = !isCampanhasExpanded;
+            if (isCampanhasExpanded) {
+                // Remove fixed height, use max-height for transition
+                campanhasContainer.style.height = 'auto';
+                campanhasContainer.style.maxHeight = '800px';
+                campanhasContainer.style.overflowY = 'auto';
+                toggleBtn.style.transform = 'rotate(180deg)';
+                toggleBtn.style.color = 'var(--text-heading)';
+            } else {
+                campanhasContainer.style.height = '300px';
+                campanhasContainer.style.maxHeight = '300px';
+                campanhasContainer.style.overflowY = 'hidden';
+                toggleBtn.style.transform = 'rotate(0deg)';
+                toggleBtn.style.color = 'var(--text-muted)';
+                campanhasContainer.scrollTop = 0;
+            }
+        });
+    }
 </script>
