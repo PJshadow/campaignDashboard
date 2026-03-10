@@ -2,3 +2,4 @@
 node_modules/
 /.tmp.drivedownload/
 /.tmp.driveupload/
+public/downloads
