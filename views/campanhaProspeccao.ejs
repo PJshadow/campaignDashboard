@@ -1,0 +1,149 @@
+<div class="page-header">
+    <h2>Prospecção de Clientes</h2>
+    <p class="page-breadcrumb">Busca de leads utilizando Azure Maps API</p>
+</div>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-header">
+        <i class="fas fa-search-location"></i>
+        Nova Campanha
+    </div>
+    <div class="card-body">
+        <form id="prospeccaoForm" action="/api/iniciar-prospeccao" method="POST">
+
+            <div class="form-group mb-3">
+                <label for="tipoEmpresa">Qual tipo de estabelecimento você busca?</label>
+                <input type="text" id="tipoEmpresa" name="tipoEmpresa"
+                    placeholder="ex: loja de roupas, padaria, clínica médica" required>
+            </div>
+
+            <div class="dashboard-grid" style="gap: 16px; margin-bottom: 24px;">
+                <div class="form-group mb-0">
+                    <label for="estado">Estado (UF)</label>
+                    <select id="estado" name="estado" class="form-control"
+                        style="width:100%; padding:12px; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:var(--radius-sm); font-family:var(--font-family);"
+                        required>
+                        <option value="">Selecione...</option>
+                        <option value="AC">AC - Acre</option>
+                        <option value="AL">AL - Alagoas</option>
+                        <option value="AP">AP - Amapá</option>
+                        <option value="AM">AM - Amazonas</option>
+                        <option value="BA">BA - Bahia</option>
+                        <option value="CE">CE - Ceará</option>
+                        <option value="DF">DF - Distrito Federal</option>
+                        <option value="ES">ES - Espírito Santo</option>
+                        <option value="GO">GO - Goiás</option>
+                        <option value="MA">MA - Maranhão</option>
+                        <option value="MT">MT - Mato Grosso</option>
+                        <option value="MS">MS - Mato Grosso do Sul</option>
+                        <option value="MG">MG - Minas Gerais</option>
+                        <option value="PA">PA - Pará</option>
+                        <option value="PB">PB - Paraíba</option>
+                        <option value="PR">PR - Paraná</option>
+                        <option value="PE">PE - Pernambuco</option>
+                        <option value="PI">PI - Piauí</option>
+                        <option value="RJ">RJ - Rio de Janeiro</option>
+                        <option value="RN">RN - Rio Grande do Norte</option>
+                        <option value="RS">RS - Rio Grande do Sul</option>
+                        <option value="RO">RO - Rondônia</option>
+                        <option value="RR">RR - Roraima</option>
+                        <option value="SC">SC - Santa Catarina</option>
+                        <option value="SP">SP - São Paulo</option>
+                        <option value="SE">SE - Sergipe</option>
+                        <option value="TO">TO - Tocantins</option>
+                    </select>
+                </div>
+
+                <div class="form-group mb-0">
+                    <label for="cidade">Cidade</label>
+                    <select id="cidade" name="cidade" class="form-control"
+                        style="width:100%; padding:12px; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border); border-radius:var(--radius-sm); font-family:var(--font-family);"
+                        required disabled>
+                        <option value="">Selecione um estado primeiro</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="submit" id="submitBtn" class="btn btn-primary" style="width: 100%;">
+                <i class="fas fa-search"></i> Iniciar Busca de Leads
+            </button>
+
+        </form>
+    </div>
+</div>
+
+<!-- Modal / Feedback for success/download or errors -->
+<% if (typeof success !=='undefined' && success) { %>
+    <div class="card mt-3" style="border-color: var(--success); background: rgba(34, 197, 94, 0.05); max-width: 600px;">
+        <div class="card-body text-center">
+            <i class="fas fa-check-circle" style="color: var(--success); font-size: 2rem; margin-bottom: 12px;"></i>
+            <h4 style="color: var(--success); margin-bottom: 8px;">Busca Concluída!</h4>
+            <p style="color: var(--text-heading); font-size: 0.9rem;">Encontramos <strong>
+                    <%= leadsCount %>
+                </strong> empresas para a busca "<%= tipoEmpresa %>" em <%= cidade %> - <%= estado %>.</p>
+
+            <a href="<%= downloadUrl %>" class="btn btn-success mt-2" download>
+                <i class="fas fa-file-excel"></i> Baixar Planilha de Leads
+            </a>
+            <p class="text-muted" style="font-size: 0.75rem; margin-top: 12px;">
+                * O arquivo está disponível para download e será apagado automaticamente em 24 horas.
+            </p>
+        </div>
+    </div>
+    <% } %>
+
+        <% if (typeof error !=='undefined' && error) { %>
+            <div class="card mt-3"
+                style="border-color: var(--danger); background: rgba(239, 68, 68, 0.05); max-width: 600px;">
+                <div class="card-body">
+                    <p style="color: var(--danger); margin: 0;"><i class="fas fa-exclamation-triangle"></i>
+                        <strong>Erro:</strong>
+                        <%= error %>
+                    </p>
+                </div>
+            </div>
+            <% } %>
+
+                <script>
+                    // Cascading dropdown for Cities based on State
+                    document.getElementById('estado').addEventListener('change', function () {
+                        const estado = this.value;
+                        const cidadeSelect = document.getElementById('cidade');
+
+                        if (estado) {
+                            cidadeSelect.disabled = true;
+                            cidadeSelect.innerHTML = '<option value="">Carregando...</option>';
+
+                            fetch(`/api/cidades/${estado}`)
+                                .then(response => response.json())
+                                .then(cidades => {
+                                    cidadeSelect.innerHTML = '';
+                                    if (cidades.length === 0) {
+                                        cidadeSelect.innerHTML = '<option value="">Nenhuma cidade encontrada</option>';
+                                    } else {
+                                        cidades.forEach(cidade => {
+                                            const option = document.createElement('option');
+                                            option.value = cidade;
+                                            option.textContent = cidade;
+                                            cidadeSelect.appendChild(option);
+                                        });
+                                        cidadeSelect.disabled = false;
+                                    }
+                                })
+                                .catch(error => {
+                                    console.error('Erro ao carregar cidades:', error);
+                                    cidadeSelect.innerHTML = '<option value="">Erro ao carregar cidades</option>';
+                                });
+                        } else {
+                            cidadeSelect.innerHTML = '<option value="">Selecione um estado primeiro</option>';
+                            cidadeSelect.disabled = true;
+                        }
+                    });
+
+                    // Loading state on form submit
+                    document.getElementById('prospeccaoForm').addEventListener('submit', function () {
+                        const btn = document.getElementById('submitBtn');
+                        btn.disabled = true;
+                        btn.innerHTML = '<span class="spinner" style="margin-right:8px; border-top-color:#fff;"></span> Buscando empresas... Isso pode demorar.';
+                    });
+                </script>

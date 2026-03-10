@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Dashboard IA — Painel de controle de campanhas">
+    <title>Dashboard IA</title>
+    <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="/css/styles.css" rel="stylesheet">
+</head>
+
+<body>
+
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <div class="app-wrapper">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <img src="/assets/img/logo.png" alt="Logo">
+                <span>Dashboard IA</span>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="sidebar-section-label">Principal</div>
+                <a href="/"
+                    class="sidebar-link<%= typeof activePage !== 'undefined' && activePage === 'home' ? ' active' : '' %>">
+                    <i class="fas fa-tachometer-alt"></i>
+                    Painel de Controle
+                </a>
+
+                <div class="sidebar-section-label">Campanhas</div>
+                <div class="sidebar-link" data-collapse="subnavCampanhas">
+                    <i class="fas fa-columns"></i>
+                    Geração de Leads
+                    <span class="sidebar-toggle-icon"><i class="fas fa-chevron-down"></i></span>
+                </div>
+                <div class="sidebar-subnav" id="subnavCampanhas">
+                    <a href="/campanhaProspeccao"
+                        class="sidebar-link<%= typeof activePage !== 'undefined' && activePage === 'prospeccao' ? ' active' : '' %>">
+                        Prospecção
+                    </a>
+                </div>
+
+                <div class="sidebar-section-label">Registros</div>
+                <div class="sidebar-link" data-collapse="subnavHistory">
+                    <i class="fas fa-book-open"></i>
+                    Histórico
+                    <span class="sidebar-toggle-icon"><i class="fas fa-chevron-down"></i></span>
+                </div>
+                <div class="sidebar-subnav" id="subnavHistory">
+                    <a href="/history"
+                        class="sidebar-link<%= typeof activePage !== 'undefined' && activePage === 'history' ? ' active' : '' %>">
+                        Campanhas
+                    </a>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                Logado como: <strong>
+                    <%= typeof name !=='undefined' ? name : '' %>
+                </strong>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <div class="main-content">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="topbar-toggle" id="sidebarToggle" aria-label="Toggle menu">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                </div>
+                <div class="topbar-right">
+                    <div class="user-dropdown">
+                        <button class="user-dropdown-btn" id="userDropdownBtn">
+                            <i class="fas fa-user"></i>
+                            <span>
+                                <%= typeof name !=='undefined' ? name : '' %>
+                            </span>
+                            <i class="fas fa-chevron-down" style="font-size:0.6rem; opacity:0.6"></i>
+                        </button>
+                        <div class="user-dropdown-menu" id="userDropdownMenu">
+                            <a href="/"><i class="fas fa-tachometer-alt"></i> Painel</a>
+                            <div class="divider"></div>
+                            <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <%- body %>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+
+</html>

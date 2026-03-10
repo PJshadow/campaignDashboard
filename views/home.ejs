@@ -1,0 +1,200 @@
+<div class="page-header">
+    <h2>Bem vindo, <%= name %>
+    </h2>
+    <p class="page-breadcrumb">Painel de Controle do Agente IA e Workflows</p>
+</div>
+
+<div class="dashboard-grid">
+    <!-- Column 1 — Recent Campaigns -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-satellite-dish"></i>
+                Últimas Prospecções
+            </div>
+            <div class="card-body">
+                <div id="campanhas-container">
+                    <p class="no-campaigns"><span class="spinner"></span> Carregando histórico...</p>
+                </div>
+            </div>
+        </div>
+        <div class="mt-3">
+            <a href="/campanhaProspeccao" class="btn btn-primary" style="width:100%">
+                <i class="fas fa-search-location"></i> Nova Busca Leads
+            </a>
+        </div>
+    </div>
+
+    <!-- Column 2 — Chart -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-chart-line"></i>
+                Leads Atingidos nos Últimos 5 Dias
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="graficoLeadsPorData"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Planilhas de Download Disponíveis -->
+<div class="dashboard-grid mt-3" style="grid-template-columns: 1fr;">
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-file-excel" style="color: var(--success)"></i>
+                Planilhas Geradas Disponíveis para Download
+            </div>
+            <div class="card-body">
+                <% if (typeof arquivosParaDownload !=='undefined' && arquivosParaDownload.length> 0) { %>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Nome do Arquivo</th>
+                                    <th>Gerado em</th>
+                                    <th>Ação</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% arquivosParaDownload.forEach(file=> { %>
+                                    <tr>
+                                        <td><strong>
+                                                <%= file.name %>
+                                            </strong></td>
+                                        <td>
+                                            <%= file.date.toLocaleString('pt-BR') %>
+                                        </td>
+                                        <td>
+                                            <a href="<%= file.url %>" class="btn btn-success btn-sm" download>
+                                                <i class="fas fa-download"></i> Baixar
+                                            </a>
+                                        </td>
+                                    </tr>
+                                    <% }) %>
+                            </tbody>
+                        </table>
+                    </div>
+                    <% } else { %>
+                        <p class="no-campaigns">Nenhuma planilha gerada recentemente.</p>
+                        <% } %>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chart.js (single CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+    // ---- Campaign polling ----
+    function carregarCampanhas() {
+        fetch('/api/campanhas')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('campanhas-container');
+                container.innerHTML = '';
+
+                if (data.length === 0) {
+                    container.innerHTML = '<p class="no-campaigns">Nenhuma campanha registrada recentemente.</p>';
+                    return;
+                }
+
+                data.forEach(c => {
+                    container.insertAdjacentHTML('beforeend', `
+            <div class="campaign-block">
+              <p><strong>Tipo:</strong> ${c.TipoDeCampanha}</p>
+              <p><strong>Segmento:</strong> ${c.TipoDeLead}</p>
+              <p><strong>Local:</strong> ${c.Cidade}, ${c.estado}</p>
+              <p><strong>Data:</strong> ${new Date(c.Inicio).toLocaleString('pt-BR')}</p>
+              <p><strong>Leads Atingidos:</strong> <span class="badge" style="background:var(--primary); color:white; padding: 2px 6px; border-radius: 4px;">${c.leadsAlcancados}</span></p>
+            </div>
+          `);
+                });
+            })
+            .catch(() => {
+                document.getElementById('campanhas-container').innerHTML =
+                    '<p class="no-campaigns" style="color:var(--danger)">Erro ao carregar últimas atividades.</p>';
+            });
+    }
+
+    setInterval(carregarCampanhas, 10000);
+    carregarCampanhas();
+
+    // ---- Leads chart ----
+    let chartInstance;
+    function atualizarGrafico() {
+        try {
+            const dados = <%- dadosGrafico %>;
+            const hoje = new Date();
+            const labels = [];
+            for (let i = 4; i >= 0; i--) {
+                const d = new Date(hoje);
+                d.setDate(hoje.getDate() - i);
+                labels.push(d.toLocaleDateString('pt-BR'));
+            }
+
+            const agrupado = {};
+            dados.forEach(item => {
+                const key = new Date(item.inicio).toLocaleDateString('pt-BR');
+                agrupado[key] = (agrupado[key] || 0) + item.leads;
+            });
+            const valores = labels.map(l => agrupado[l] || 0);
+
+            const ctx = document.getElementById('graficoLeadsPorData').getContext('2d');
+
+            if (chartInstance) {
+                chartInstance.data.labels = labels;
+                chartInstance.data.datasets[0].data = valores;
+                chartInstance.update();
+            } else {
+                chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Total de Leads',
+                            data: valores,
+                            fill: true,
+                            borderColor: '#6366f1',
+                            backgroundColor: 'rgba(99,102,241,0.12)',
+                            pointBackgroundColor: '#6366f1',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: { color: '#8b8fa3', font: { family: 'Inter' } }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#5c5f73' },
+                                grid: { color: 'rgba(255,255,255,0.04)' }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                ticks: { color: '#5c5f73' },
+                                grid: { color: 'rgba(255,255,255,0.04)' }
+                            }
+                        }
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Erro no gráfico:', e);
+        }
+    }
+
+    setInterval(atualizarGrafico, 5000);
+    atualizarGrafico();
+</script>

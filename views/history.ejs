@@ -1,0 +1,75 @@
+<div class="page-header">
+    <h2>Histórico de Campanhas Finalizadas</h2>
+    <p class="page-breadcrumb">Mostra o histórico de campanhas realizadas</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <i class="fas fa-history"></i>
+        Campanhas Finalizadas
+    </div>
+    <div class="card-body">
+        <div class="table-wrapper">
+            <table data-sortable>
+                <thead>
+                    <tr>
+                        <th>ID <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Local Alvo <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Tipo <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Pesquisa <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Leads <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Início <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                        <th>Status <span class="sort-icon"><i class="fas fa-sort"></i></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% if (campanhas && campanhas.length) { %>
+                        <% campanhas.forEach(c=> { %>
+                            <tr>
+                                <td>
+                                    <%= c.id %>
+                                </td>
+                                <td>
+                                    <%= c.Cidade %> - <%= c.estado %>
+                                </td>
+                                <td>
+                                    <%= c.TipoDeCampanha %>
+                                </td>
+                                <td>
+                                    <%= c.TipoDeLead %>
+                                </td>
+                                <td>
+                                    <%= c.leadsAlcancados %>
+                                </td>
+                                <td class="date-cell">
+                                    <%= c.Inicio %>
+                                </td>
+                                <td><span class="status-badge finished">Finalizada</span></td>
+                            </tr>
+                            <% }); %>
+                                <% } else { %>
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted" style="padding:24px">Nenhuma
+                                            campanha finalizada.</td>
+                                    </tr>
+                                    <% } %>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Format date cells
+    document.querySelectorAll('.date-cell').forEach(cell => {
+        const raw = new Date(cell.textContent.trim());
+        if (!isNaN(raw)) {
+            const dia = String(raw.getDate()).padStart(2, '0');
+            const mes = String(raw.getMonth() + 1).padStart(2, '0');
+            const ano = raw.getFullYear();
+            const hora = String(raw.getHours()).padStart(2, '0');
+            const min = String(raw.getMinutes()).padStart(2, '0');
+            cell.textContent = `${dia}/${mes}/${ano} ${hora}:${min}`;
+        }
+    });
+</script>

@@ -1,15 +1,13 @@
-// Never forget to set cookie to secure:true before deploying to production! While developing, set it to false
-
-// Main imports
 const express = require('express');
-const app = express(); // Express instance, becomes the main application object
-app.set('trust proxy', 1); // Trust reverse proxy (Nginx, etc.)
-const exprhbs = require('express-handlebars'); // Handlebars module
-const path = require('path'); // Native module that deals with paths
-const { got } = require('got'); //HTTP client for APIs
-require('dotenv').config(); // Environment variables, used to hide API keys and sensitive data
+const app = express();
+app.set('trust proxy', 1);
+const path = require('path');
+const fs = require('fs');
+const axios = require('axios');
+const ExcelJS = require('exceljs');
+require('dotenv').config();
 
-// Create MySQL connection pool to manage multiple connections and avoid timeout issues
+// Create MySQL connection pool
 const mysql = require('mysql2');
 const db = mysql.createPool({
   host: process.env.DB_HOST,
@@ -18,34 +16,75 @@ const db = mysql.createPool({
   database: process.env.DB_NAME,
   port: process.env.DB_PORT,
   waitForConnections: true,
-  connectionLimit: 10,  // Maximum number of connections
-  queueLimit: 0 // Maximum number of waiting connections. 0 means no limit
+  connectionLimit: 10,
+  queueLimit: 0
 });
 
-// Middleware that handles form data coming from front end http requests
-app.use(express.urlencoded({ extended: true })); // this line of code tells our server to use the body-parser middleware to parse incoming request bodies. extended: true means that we are using the extended version of the body-parser middleware.
-app.use(express.json()); // used to parse JSON data from the request body and make it available in the req.body property of the request object.
+db.getConnection((err, connection) => {
+  if (err) {
+    console.error('======================================');
+    console.error('ERRO DE CONEXÃO COM O BANCO DE DADOS:');
+    console.error(err.message);
+    if (err.code === 'ECONNREFUSED') {
+      console.error('Dica: O servidor MySQL parece estar desligado ou o host/porta no .env estão errados.');
+    }
+    if (err.code === 'ER_ACCESS_DENIED_ERROR') {
+      console.error('Dica: O usuário ou a senha no .env estão incorretos.');
+    }
+    if (err.code === 'ER_BAD_DB_ERROR') {
+      console.error(`Dica: O banco de dados "${process.env.DB_NAME}" não existe.`);
+    }
+    console.error('======================================');
+  } else {
+    console.log('✅ Conexão com o banco de dados MySQL (' + process.env.DB_NAME + ') estabelecida com sucesso!');
+    connection.release();
+  }
+});
 
-// Session Management, to keep users logged in, cookies, etc.
+// Middleware
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// Static files — served before routes
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Session management
 const session = require('express-session');
 app.use(session({
   secret: process.env.EXPRESS_SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,  //use false for local development and true for production!
+    secure: process.env.COOKIE_SECURE === 'true',  // reads from .env — set to 'false' for local, 'true' for VPS
     httpOnly: true,
-    sameSite: 'lax'      // <--- Helps in persistence between pages
+    sameSite: 'lax'
   }
 }));
 
-// Encryption of passwords
+// Password encryption
 const bcrypt = require('bcryptjs');
 
-// server port
+// Server port
 const PORT = process.env.PORT;
 
-// Middleware to protect private routes with login
+// EJS setup — using express-ejs-layouts pattern via manual render helper
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// Helper: render a view wrapped in the layout
+function renderWithLayout(res, view, data = {}) {
+  // First render the page partial
+  res.render(view, data, (err, pageHtml) => {
+    if (err) {
+      console.error(`Erro ao renderizar ${view}:`, err);
+      return res.status(500).send('Erro interno do servidor.');
+    }
+    // Then render the layout, injecting the page HTML as `body`
+    res.render('layout', { ...data, body: pageHtml });
+  });
+}
+
+// Auth middleware
 function isAuthenticated(req, res, next) {
   if (req.session && req.session.userId != null) {
     return next();
@@ -53,85 +92,262 @@ function isAuthenticated(req, res, next) {
   res.redirect('/login');
 }
 
-// Configuration of the Handlebars as template engine
-app.engine('handlebars', exprhbs.engine());
-app.set('view engine', 'handlebars');
+// =============================================
+//  BACKGROUND TASKS
+// =============================================
 
-// Main route - Protected route of homepage dashboard, including mysql information
+// Cleanup old excel files every hour
+setInterval(() => {
+  const downloadsDir = path.join(__dirname, 'public', 'downloads');
+  if (fs.existsSync(downloadsDir)) {
+    fs.readdir(downloadsDir, (err, files) => {
+      if (err) return console.error('Erro ao ler diretório de downloads:', err);
+
+      const now = Date.now();
+      const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+      files.forEach(file => {
+        const filePath = path.join(downloadsDir, file);
+        fs.stat(filePath, (err, stats) => {
+          if (err) return;
+          if (now - stats.mtimeMs > maxAge) {
+            fs.unlink(filePath, err => {
+              if (err) console.error(`Erro ao deletar ${file}`, err);
+              else console.log(`${file} deletado (mais de 7 dias).`);
+            });
+          }
+        });
+      });
+    });
+  }
+}, 60 * 60 * 1000);
+
+
+// =============================================
+//  ROUTES
+// =============================================
+
+// Home — Dashboard
 app.get('/', isAuthenticated, (req, res) => {
-  const sqlCampanhasAtivas = "SELECT * FROM campanhas WHERE emAndamento = 1";
+  const sqlAtivas = "SELECT * FROM campanhas WHERE emAndamento = 1";
   const sqlGrafico = "SELECT TipoDeCampanha, leadsAlcancados, Inicio FROM campanhas";
 
-  db.query(sqlCampanhasAtivas, function(err, campanhasAtivas) {
-    if (err) throw err;
+  db.query(sqlAtivas, (err, campanhasAtivas) => {
+    if (err) {
+      console.error('Erro ao buscar campanhas ativas:', err.message);
+      return res.status(500).send('Erro ao carregar o painel.');
+    }
 
-    db.query(sqlGrafico, function(err2, campanhasParaGrafico) {
-      if (err2) throw err2;
+    db.query(sqlGrafico, (err2, campanhasParaGrafico) => {
+      if (err2) {
+        console.error('Erro ao buscar dados do gráfico:', err2.message);
+        return res.status(500).send('Erro ao carregar o painel.');
+      }
 
-      const dadosGrafico = campanhasParaGrafico.map(campanha => ({
-        tipo: campanha.TipoDeCampanha,
-        leads: campanha.leadsAlcancados,
-        inicio: campanha.Inicio
+      const dadosGrafico = campanhasParaGrafico.map(c => ({
+        tipo: c.TipoDeCampanha,
+        leads: c.leadsAlcancados,
+        inicio: c.Inicio
       }));
+
+      // Ler arquivos disponíveis na pasta downloads
+      const downloadsDir = path.join(__dirname, 'public', 'downloads');
+      let arquivosParaDownload = [];
+      if (fs.existsSync(downloadsDir)) {
+        try {
+          const files = fs.readdirSync(downloadsDir);
+          arquivosParaDownload = files.map(file => {
+            const stats = fs.statSync(path.join(downloadsDir, file));
+            return {
+              name: file,
+              url: `/downloads/${file}`,
+              date: stats.mtime
+            };
+          }).sort((a, b) => b.date - a.date); // Mais recentes primeiro
+        } catch (readErr) {
+          console.error("Erro ao ler diretório de downloads para exibir na home:", readErr);
+        }
+      }
 
       console.log('Acesso à página Home');
 
-      res.render('home', {
+      renderWithLayout(res, 'home', {
         name: req.session.userName,
         campanhas: campanhasAtivas,
-        dadosGrafico: JSON.stringify(dadosGrafico)
+        dadosGrafico: JSON.stringify(dadosGrafico),
+        arquivosParaDownload,
+        activePage: 'home'
       });
     });
   });
 });
 
-// Routes - Other protected pages
-app.get('/campanhaProspeccao', isAuthenticated, (req, res) => {
-  console.log('Acesso à página campanhaProspeccao');
-  res.render('campanhaProspeccao');
-});
-
+// FAQ
 app.get('/faq', isAuthenticated, (req, res) => {
-  console.log('Acesso à página faq');
-  res.render('faq');
+  console.log('Acesso à página FAQ');
+  renderWithLayout(res, 'faq', {
+    name: req.session.userName,
+    activePage: 'faq'
+  });
 });
 
-app.get('/prospection-error', isAuthenticated, (req, res) => {
-  console.log('Acesso à página prospection-error');
-  res.render('prospection-error');
-});
-
-app.get('/prospection-typeError', isAuthenticated, (req, res) => {
-  console.log('Acesso à página prospection-typeError');
-  res.render('prospection-typeError');
-});
-
-app.get('/prospection-limitError', isAuthenticated, (req, res) => {
-  console.log('Acesso à página prospection-limitError');
-  res.render('prospection-limitError');
-});
-
-app.get('/prospection-success', isAuthenticated, (req, res) => {
-  console.log('Acesso à página prospection-success');
-  res.render('prospection-success');
-});
-
+// History
 app.get('/history', isAuthenticated, (req, res) => {
-  const sqlCampanhasFinalizadas = "SELECT * FROM campanhas WHERE emAndamento = 0";
+  const sql = "SELECT * FROM campanhas ORDER BY Inicio DESC";
 
-  db.query(sqlCampanhasFinalizadas, (err, campanhasFinalizadas) => {
-    if (err) throw err;
+  db.query(sql, (err, campanhasFinalizadas) => {
+    if (err) {
+      console.error('Erro ao buscar histórico:', err.message);
+      return res.status(500).send('Erro ao carregar o histórico: ' + err.message);
+    }
 
-    console.log('Acesso à página history');
-    
-    res.render('history', {
+    console.log('Acesso à página History - encontrou ' + campanhasFinalizadas.length + ' campanhas');
+
+    renderWithLayout(res, 'history', {
       name: req.session.userName,
-      campanhas: campanhasFinalizadas
+      campanhas: campanhasFinalizadas,
+      activePage: 'history'
     });
   });
 });
 
-// GET route to fetch unique cities for a given state
+// Prospecção GET
+app.get('/campanhaProspeccao', isAuthenticated, (req, res) => {
+  console.log('Acesso à página Prospecção');
+  renderWithLayout(res, 'campanhaProspeccao', {
+    name: req.session.userName,
+    activePage: 'prospeccao'
+  });
+});
+
+// Prospecção POST (Azure Maps Integration)
+app.post('/api/iniciar-prospeccao', isAuthenticated, async (req, res) => {
+  const { tipoEmpresa, estado, cidade } = req.body;
+  const apiKey = process.env.AZURE_MAPS_KEY;
+
+  if (!apiKey) {
+    console.error('AZURE_MAPS_KEY não configurada no .env');
+    return renderWithLayout(res, 'campanhaProspeccao', {
+      name: req.session.userName, activePage: 'prospeccao',
+      error: 'Chave de API do Azure não configurada no servidor.'
+    });
+  }
+
+  try {
+    // 1. Get Coordinates
+    const addressQuery = `${cidade} ${estado}`;
+    const addressUrl = `https://atlas.microsoft.com/search/address/json?api-version=1.0&subscription-key=${apiKey}&query=${encodeURIComponent(addressQuery)}&countrySet=BR&limit=1`;
+
+    const addressResponse = await axios.get(addressUrl);
+    if (!addressResponse.data.results || addressResponse.data.results.length === 0) {
+      return renderWithLayout(res, 'campanhaProspeccao', {
+        name: req.session.userName, activePage: 'prospeccao',
+        error: `Não foi possível encontrar a cidade: ${cidade} - ${estado}`
+      });
+    }
+
+    const { lat, lon } = addressResponse.data.results[0].position;
+
+    // 2. Fuzzy Search for Businesses
+    const fuzzyQuery = encodeURIComponent(`${tipoEmpresa}`);
+    const fuzzyUrl = `https://atlas.microsoft.com/search/fuzzy/json?api-version=1.0&subscription-key=${apiKey}&query=${fuzzyQuery}&lat=${lat}&lon=${lon}&radius=30000&countrySet=BR&limit=100`;
+
+    const fuzzyResponse = await axios.get(fuzzyUrl);
+    let results = fuzzyResponse.data.results || [];
+
+    // 3. Filter strictly by City
+    const cidadeNormalizada = cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+    const leadsFiltrados = results.filter(lead => {
+      const leadCity = lead.address.localName || lead.address.municipality || "";
+      const cityNorm = leadCity.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      return cityNorm === cidadeNormalizada;
+    });
+
+    if (leadsFiltrados.length === 0) {
+      return renderWithLayout(res, 'campanhaProspeccao', {
+        name: req.session.userName, activePage: 'prospeccao',
+        error: `A busca não encontrou nenhuma empresa do tipo "${tipoEmpresa}" em ${cidade} - ${estado}.`
+      });
+    }
+
+    // 4. Create Excel Workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Leads');
+    worksheet.columns = [
+      { header: 'Nome', key: 'name', width: 35 },
+      { header: 'Endereço', key: 'address', width: 45 },
+      { header: 'Telefone', key: 'phone', width: 20 },
+      { header: 'Categoria', key: 'category', width: 30 },
+      { header: 'URL', key: 'url', width: 40 }
+    ];
+
+    worksheet.getRow(1).font = { bold: true };
+
+    leadsFiltrados.forEach(lead => {
+      worksheet.addRow({
+        name: lead.poi ? lead.poi.name : 'N/A',
+        address: lead.address ? lead.address.freeformAddress : 'N/A',
+        phone: lead.poi && lead.poi.phone ? lead.poi.phone : 'Não informado',
+        category: lead.poi && lead.poi.classifications ? lead.poi.classifications.map(c => c.names[0].name).join(', ') : '',
+        url: lead.poi && lead.poi.url ? lead.poi.url : ''
+      });
+    });
+
+    // 5. Save File
+    const timestamp = Date.now();
+    const safeCity = cidade.replace(/\s+/g, '_').toLowerCase();
+    const filename = `leads_${safeCity}_${timestamp}.xlsx`;
+    const filepath = path.join(__dirname, 'public', 'downloads', filename);
+
+    const downloadsDir = path.dirname(filepath);
+    if (!fs.existsSync(downloadsDir)) {
+      fs.mkdirSync(downloadsDir, { recursive: true });
+    }
+
+    await workbook.xlsx.writeFile(filepath);
+
+    // 6. DB Record
+    const dbSql = "INSERT INTO campanhas (TipoDeCampanha, TipoDeLead, Inicio, estado, Cidade, leadsAlcancados, emAndamento) VALUES (?, ?, NOW(), ?, ?, ?, 0)";
+    db.query(dbSql, ['Prospecção (Planilha)', tipoEmpresa, estado, cidade, leadsFiltrados.length], (err) => {
+      if (err) console.error('Erro ao registrar campanha no BD:', err);
+    });
+
+    // 7. Render Success
+    renderWithLayout(res, 'campanhaProspeccao', {
+      name: req.session.userName,
+      activePage: 'prospeccao',
+      success: true,
+      tipoEmpresa,
+      estado,
+      cidade,
+      leadsCount: leadsFiltrados.length,
+      downloadUrl: `/downloads/${filename}`
+    });
+
+  } catch (err) {
+    console.error('Erro na API da Azure:', err);
+    renderWithLayout(res, 'campanhaProspeccao', {
+      name: req.session.userName,
+      activePage: 'prospeccao',
+      error: 'Problema de conexão com a API de Mapas. Verifique a chave ou o status do serviço.'
+    });
+  }
+});
+
+// API — Recent campaigns (JSON, for polling)
+app.get('/api/campanhas', isAuthenticated, (req, res) => {
+  const sql = "SELECT * FROM campanhas ORDER BY Inicio DESC LIMIT 10";
+  db.query(sql, (err, result) => {
+    if (err) {
+      console.error('Erro ao buscar campanhas:', err.message);
+      return res.status(500).json({ error: 'Erro ao buscar campanhas' });
+    }
+    res.json(result);
+  });
+});
+
+// API — Cities by state
 app.get('/api/cidades/:estado', isAuthenticated, (req, res) => {
   const estado = req.params.estado.toUpperCase();
 
@@ -140,32 +356,33 @@ app.get('/api/cidades/:estado', isAuthenticated, (req, res) => {
       console.error('Erro ao buscar cidades:', err.message);
       return res.status(500).json({ error: 'Erro ao buscar cidades' });
     }
-
-    const cidades = results.map(row => row.cidade);
-    res.json(cidades);
+    res.json(results.map(r => r.cidade));
   });
 });
 
-// GET route to display the login form
+
+// =============================================
+//  AUTH ROUTES
+// =============================================
+
+// Login page
 app.get('/login', (req, res) => {
-  console.log('Acesso à página login');
+  console.log('Acesso à página Login');
   res.render('login');
 });
 
-
-// NEW POST route to authenticate the user
+// Login POST
 app.post('/login', (req, res) => {
-  const { email, password, remember } = req.body; // Captura o checkbox "remember"
-  console.log(req.body);
+  const { email, password, remember } = req.body;
 
   db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
     if (err) {
-      console.error('Erro no banco de dados:', err);
-      return res.send('Erro no banco de dados');
+      console.error('Erro no banco de dados:', err.message);
+      return res.status(500).send('Erro no banco de dados.');
     }
 
     if (results.length === 0) {
-      return res.send('Usuário não encontrado');
+      return res.send('Usuário não encontrado.');
     }
 
     const user = results[0];
@@ -175,11 +392,10 @@ app.post('/login', (req, res) => {
       req.session.userId = user.id;
       req.session.userName = user.name;
 
-      // Define tempo de vida do cookie se "remember" estiver marcado
       if (remember) {
-        req.session.cookie.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 dias
+        req.session.cookie.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
       } else {
-        req.session.cookie.expires = false; // Expira ao fechar o navegador
+        req.session.cookie.expires = false;
       }
 
       req.session.save(() => {
@@ -188,139 +404,71 @@ app.post('/login', (req, res) => {
 
       console.log(`Usuário ${user.name} logado com sucesso!`);
     } else {
-      res.send('Senha incorreta');
+      res.send('Senha incorreta.');
     }
   });
 });
 
-
-// Logout route to end the session
+// Logout
 app.get('/logout', (req, res) => {
-  console.log('Acesso à página logout');
+  console.log('Logout');
   req.session.destroy(() => {
-    res.redirect('/');
+    res.redirect('/login');
   });
 });
 
 
+// =============================================
+//  CAMPAIGN CONTROL (MySQL only — no N8N)
+// =============================================
 
-
-
-// CAMPAIGNS CONTROL SECTION
-
-// POST route to start campaign on N8N
-app.post('/api/enviar-campanha', (req, res) => {
-  const { tipoEmpresa, estado, cidade, baseText } = req.body; // Captura os dados do formulário
-
-  db.query('SELECT COUNT(*) AS total FROM campanhas WHERE emAndamento = 1 OR emAndamento = 2', (err, results) => {
-    if (err) {
-      console.error('Erro ao consultar o banco de dados:', err.message);
-      return res.redirect('/prospection-error');
-    }
-
-    const campanhasAtivas = results[0].total;
-    const limiteCampanhas = parseInt(process.env.NUMBER_OF_CAMPAIGNS, 10); // Converte para inteiro, 10 é o radix
-
-    if (campanhasAtivas >= limiteCampanhas) {
-      console.warn(`Limite de ${limiteCampanhas} campanhas simultâneas atingido.`);
-      return res.redirect('/prospection-limitError');
-    }
-
-    // Define o webhook com base no valor de baseText
-    let webhookUrl;
-    if (baseText === 'AIprospection') {
-      webhookUrl = process.env.N8N_WEBHOOK_1;
-    } else if (baseText === 'websites') {
-      webhookUrl = process.env.N8N_WEBHOOK_2;
-    } else {
-      console.error('Tipo de campanha inválido.');
-      return res.redirect('/prospection-typeError');
-    }
-
-    // Envia os dados para o N8N
-    got.post(webhookUrl, {
-      json: { tipoEmpresa, estado, cidade },
-      responseType: 'json'
-    }).then(() => {
-      console.log('Uma campanha de prospecção foi iniciada.');
-      res.redirect('/prospection-success');
-    }).catch(error => {
-      console.error('Erro ao enviar para N8N:', error.message);
-      res.redirect('/prospection-error');
-    });
-  });
-});
-
-// POST route to stop all active and paused campaigns on N8N
-app.post('/stopcampaign', (req, res) => {
+// Stop all active/paused campaigns
+app.post('/stopcampaign', isAuthenticated, (req, res) => {
   db.query('UPDATE campanhas SET emAndamento = 0 WHERE emAndamento IN (1, 2)', (err, result) => {
     if (err) {
-      console.error('Erro ao parar campanhas:', err);
-      return res.status(500).send('Erro no banco de dados. Entre em contato com o suporte.');
+      console.error('Erro ao parar campanhas:', err.message);
+      return res.status(500).send('Erro no banco de dados.');
     }
-
     if (result.affectedRows === 0) {
-      return res.send('O comando de parada já foi enviado, ou não há campanhas ativas ou pausadas no momento.');
+      return res.send('Não há campanhas ativas ou pausadas no momento.');
     }
-
-    console.log(`O comando de parada de campanha foi executado`);
-    res.send(`O comando de parada foi enviado com sucesso! Aguarde alguns minutos até o encerramento da campanha.`);
+    console.log('Comando de parada executado');
+    res.send('Comando de parada enviado com sucesso! Aguarde o encerramento.');
   });
 });
 
-
-
-
-// POST route to pause all active campaigns on N8N
-app.post('/pausecampaign', (req, res) => {
+// Pause active campaigns
+app.post('/pausecampaign', isAuthenticated, (req, res) => {
   db.query('UPDATE campanhas SET emAndamento = 2 WHERE emAndamento = 1', (err, result) => {
     if (err) {
-      console.error('Erro ao pausar campanhas:', err);
-      return res.status(500).send('Erro no banco de dados. Entre em contato com o suporte.');
+      console.error('Erro ao pausar campanhas:', err.message);
+      return res.status(500).send('Erro no banco de dados.');
     }
-
     if (result.affectedRows === 0) {
-      return res.send('O comando de pausa já foi enviado ou não há campanhas ativas no momento.');
+      return res.send('Não há campanhas ativas para pausar.');
     }
-
-    console.log(`O comando de pausa de campanha foi executado`);
-    res.send(`O comando de pausa foi enviado com sucesso! As campanhas serão pausadas em breve.`);
+    console.log('Comando de pausa executado');
+    res.send('Campanhas pausadas com sucesso!');
   });
 });
 
-// POST route to resume paused campaigns on N8N
-app.post('/resumecampaign', (req, res) => {
+// Resume paused campaigns
+app.post('/resumecampaign', isAuthenticated, (req, res) => {
   db.query('UPDATE campanhas SET emAndamento = 1 WHERE emAndamento = 2', (err, result) => {
     if (err) {
-      console.error('Erro ao retomar campanhas:', err);
-      return res.status(500).send('Erro no banco de dados. Entre em contato com o suporte.');
+      console.error('Erro ao retomar campanhas:', err.message);
+      return res.status(500).send('Erro no banco de dados.');
     }
-
     if (result.affectedRows === 0) {
-      return res.send('Não há campanhas pausadas para retomar no momento.');
+      return res.send('Não há campanhas pausadas para retomar.');
     }
-
-    console.log(`O comando de retomada de campanha foi executado`);
-    res.send(`Campanhas retomadas com sucesso!`);
+    console.log('Comando de retomada executado');
+    res.send('Campanhas retomadas com sucesso!');
   });
 });
 
 
-
-// Route to update information to show active campaigns
-app.get('/api/campanhas', isAuthenticated, (req, res) => {
-  const sql = "SELECT * FROM campanhas WHERE emAndamento IN (1, 2)";
-  db.query(sql, (err, result) => {
-    if (err) return res.status(500).json({ error: 'Erro ao buscar campanhas' });
-    res.json(result);
-  });
-});
-
-// END OF CAMPAIGNS CONTROL SECTION
-
-
-// Public folder for static files (CSS, JS, images)
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Server startup
+// =============================================
+//  START SERVER
+// =============================================
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
