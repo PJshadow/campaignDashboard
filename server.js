@@ -1,17 +1,22 @@
 const express = require('express');
-const app = express();
-const passport = require('passport');
-const LocalStrategy = require('passport-local').Strategy;
-app.set('trust proxy', 1);
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const ExcelJS = require('exceljs');
+const mysql = require('mysql2');
+const bcrypt = require('bcryptjs');
+const passport = require('passport');
+const session = require('express-session');
+const LocalStrategy = require('passport-local').Strategy;
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
-// Create MySQL connection pool
-const mysql = require('mysql2');
+const app = express();
+app.set('trust proxy', 1);
+
+// =============================================
+//  DATABASE CONNECTION
+// =============================================
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -39,76 +44,74 @@ db.getConnection((err, connection) => {
     }
     console.error('======================================');
   } else {
-    console.log('✅ Conexão com o banco de dados MySQL (' + process.env.DB_NAME + ') estabelecida com sucesso!');
+    console.log(`✅ Conexão com o banco de dados MySQL (${process.env.DB_NAME}) estabelecida com sucesso!`);
     connection.release();
   }
 });
 
-// Middleware
+// =============================================
+//  MIDDLEWARES & SECURITY
+// =============================================
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-
-// Static files — served before routes
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Rate Limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // Limit each IP to 100 requests per `window`
-  standardHeaders: 'draft-7', // set `RateLimit` and `RateLimit-Policy` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
   message: 'Muitas requisições deste IP, tente novamente em 15 minutos.'
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 5, // Limit each IP to 5 login attempts per window
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: 'Muitas tentativas de login, tente novamente em 15 minutos.'
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  limit: 10, // Limit each IP to 10 prospectings per hour
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: 'Você atingiu o limite de prospecções por hora. Tente novamente mais tarde.'
 });
 
-// Apply general limiter to all requests
 app.use(generalLimiter);
 
 // Session management
-const session = require('express-session');
 app.use(session({
   secret: process.env.EXPRESS_SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.COOKIE_SECURE === 'true',  // reads from .env — set to 'false' for local, 'true' for VPS
+    secure: process.env.COOKIE_SECURE === 'true',
     httpOnly: true,
     sameSite: 'lax'
   }
 }));
 
-// Passport Config
+// =============================================
+//  PASSPORT AUTH CONFIGURATION
+// =============================================
 passport.use(new LocalStrategy({
   usernameField: 'email',
   passwordField: 'password'
-},
-  (email, password, done) => {
-    db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
-      if (err) return done(err);
-      if (results.length === 0) return done(null, false, { message: 'Usuário não encontrado.' });
+}, (email, password, done) => {
+  db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
+    if (err) return done(err);
+    if (results.length === 0) return done(null, false, { message: 'Usuário não encontrado.' });
 
-      const user = results[0];
-      const match = await bcrypt.compare(password, user.password);
-      if (match) return done(null, user);
-      return done(null, false, { message: 'Senha incorreta.' });
-    });
-  }
-));
+    const user = results[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (match) return done(null, user);
+    return done(null, false, { message: 'Senha incorreta.' });
+  });
+}));
 
 passport.serializeUser((user, done) => done(null, user.id));
 passport.deserializeUser((id, done) => {
@@ -121,41 +124,32 @@ passport.deserializeUser((id, done) => {
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Password encryption
-const bcrypt = require('bcryptjs');
-
-// Server port
-const PORT = process.env.PORT;
-
-// EJS setup — using express-ejs-layouts pattern via manual render helper
+// =============================================
+//  VIEW ENGINE SETUP
+// =============================================
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 // Helper: render a view wrapped in the layout
 function renderWithLayout(res, view, data = {}) {
-  // First render the page partial
   res.render(view, data, (err, pageHtml) => {
     if (err) {
       console.error(`Erro ao renderizar ${view}:`, err);
       return res.status(500).send('Erro interno do servidor.');
     }
-    // Then render the layout, injecting the page HTML as `body`
     res.render('layout', { ...data, body: pageHtml });
   });
 }
 
-// Auth middleware
+// Auth guard middleware
 function isAuthenticated(req, res, next) {
-  if (req.isAuthenticated()) {
-    return next();
-  }
+  if (req.isAuthenticated()) return next();
   res.redirect('/login');
 }
 
 // =============================================
 //  BACKGROUND TASKS
 // =============================================
-
 // Cleanup old excel files every hour
 setInterval(() => {
   const downloadsDir = path.join(__dirname, 'public', 'downloads');
@@ -182,25 +176,24 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-
 // =============================================
-//  ROUTES
+//  CORE ROUTES
 // =============================================
 
-// Home — Dashboard
+// Dashboard Home
 app.get('/', isAuthenticated, (req, res) => {
   const sqlAtivas = "SELECT * FROM campanhas WHERE emAndamento = 1";
   const sqlGrafico = "SELECT TipoDeCampanha, leadsAlcancados, Inicio FROM campanhas";
 
   db.query(sqlAtivas, (err, campanhasAtivas) => {
     if (err) {
-      console.error('Erro ao buscar campanhas ativas (DB):', err);
+      console.error('Erro ao buscar campanhas ativas:', err);
       return res.status(500).send('Erro ao carregar o painel.');
     }
 
     db.query(sqlGrafico, (err2, campanhasParaGrafico) => {
       if (err2) {
-        console.error('Erro ao buscar dados do gráfico (DB):', err2);
+        console.error('Erro ao buscar dados do gráfico:', err2);
         return res.status(500).send('Erro ao carregar o painel.');
       }
 
@@ -210,7 +203,6 @@ app.get('/', isAuthenticated, (req, res) => {
         inicio: c.Inicio
       }));
 
-      // Ler arquivos disponíveis na pasta downloads
       const downloadsDir = path.join(__dirname, 'public', 'downloads');
       let arquivosParaDownload = [];
       if (fs.existsSync(downloadsDir)) {
@@ -223,13 +215,11 @@ app.get('/', isAuthenticated, (req, res) => {
               url: `/downloads/${file}`,
               date: stats.mtime
             };
-          }).sort((a, b) => b.date - a.date); // Mais recentes primeiro
+          }).sort((a, b) => b.date - a.date);
         } catch (readErr) {
-          console.error("Erro ao ler diretório de downloads para exibir na home:", readErr);
+          console.error("Erro ao ler diretório de downloads:", readErr);
         }
       }
-
-      console.log('Acesso à página Home');
 
       renderWithLayout(res, 'home', {
         name: req.user.name,
@@ -242,27 +232,22 @@ app.get('/', isAuthenticated, (req, res) => {
   });
 });
 
-// FAQ
+// FAQ Page
 app.get('/faq', isAuthenticated, (req, res) => {
-  console.log('Acesso à página FAQ');
   renderWithLayout(res, 'faq', {
     name: req.user.name,
     activePage: 'faq'
   });
 });
 
-// History
+// History Page
 app.get('/history', isAuthenticated, (req, res) => {
   const sql = "SELECT * FROM campanhas ORDER BY Inicio DESC";
-
   db.query(sql, (err, campanhasFinalizadas) => {
     if (err) {
-      console.error('Erro ao buscar histórico (DB):', err);
+      console.error('Erro ao buscar histórico:', err);
       return res.status(500).send('Erro interno ao carregar o histórico.');
     }
-
-    console.log('Acesso à página History - encontrou ' + campanhasFinalizadas.length + ' campanhas');
-
     renderWithLayout(res, 'history', {
       name: req.user.name,
       campanhas: campanhasFinalizadas,
@@ -271,16 +256,19 @@ app.get('/history', isAuthenticated, (req, res) => {
   });
 });
 
-// Prospecção GET
+// Prospecção (Leads Search)
 app.get('/campanhaProspeccao', isAuthenticated, (req, res) => {
-  console.log('Acesso à página Prospecção');
   renderWithLayout(res, 'campanhaProspeccao', {
     name: req.user.name,
     activePage: 'prospeccao'
   });
 });
 
-// Prospecção POST (Azure Maps Integration)
+// =============================================
+//  API ROUTES
+// =============================================
+
+// Azure Maps Integration for Lead Prospecting
 app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res) => {
   const { tipoEmpresa, estado, cidade } = req.body;
   const apiKey = process.env.AZURE_MAPS_KEY;
@@ -294,7 +282,6 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
   }
 
   try {
-    // 1. Get Coordinates
     const addressQuery = `${cidade} ${estado}`;
     const addressUrl = `https://atlas.microsoft.com/search/address/json?api-version=1.0&subscription-key=${apiKey}&query=${encodeURIComponent(addressQuery)}&countrySet=BR&limit=1`;
 
@@ -308,14 +295,12 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
 
     const { lat, lon } = addressResponse.data.results[0].position;
 
-    // 2. Fuzzy Search for Businesses
     const fuzzyQuery = encodeURIComponent(`${tipoEmpresa}`);
     const fuzzyUrl = `https://atlas.microsoft.com/search/fuzzy/json?api-version=1.0&subscription-key=${apiKey}&query=${fuzzyQuery}&lat=${lat}&lon=${lon}&radius=30000&countrySet=BR&limit=100`;
 
     const fuzzyResponse = await axios.get(fuzzyUrl);
     let results = fuzzyResponse.data.results || [];
 
-    // 3. Filter strictly by City
     const cidadeNormalizada = cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
     const leadsFiltrados = results.filter(lead => {
@@ -331,7 +316,6 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
       });
     }
 
-    // 4. Create Excel Workbook
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Leads');
     worksheet.columns = [
@@ -341,7 +325,6 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
       { header: 'Categoria', key: 'category', width: 30 },
       { header: 'URL', key: 'url', width: 40 }
     ];
-
     worksheet.getRow(1).font = { bold: true };
 
     leadsFiltrados.forEach(lead => {
@@ -354,26 +337,19 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
       });
     });
 
-    // 5. Save File
     const timestamp = Date.now();
     const safeCity = cidade.replace(/\s+/g, '_').toLowerCase();
     const filename = `leads_${safeCity}_${timestamp}.xlsx`;
     const filepath = path.join(__dirname, 'public', 'downloads', filename);
 
-    const downloadsDir = path.dirname(filepath);
-    if (!fs.existsSync(downloadsDir)) {
-      fs.mkdirSync(downloadsDir, { recursive: true });
-    }
-
+    if (!fs.existsSync(path.dirname(filepath))) fs.mkdirSync(path.dirname(filepath), { recursive: true });
     await workbook.xlsx.writeFile(filepath);
 
-    // 6. DB Record
     const dbSql = "INSERT INTO campanhas (TipoDeCampanha, TipoDeLead, Inicio, estado, Cidade, leadsAlcancados, emAndamento) VALUES (?, ?, NOW(), ?, ?, ?, 0)";
     db.query(dbSql, ['Prospecção (Planilha)', tipoEmpresa, estado, cidade, leadsFiltrados.length], (err) => {
       if (err) console.error('Erro ao registrar campanha no BD:', err);
     });
 
-    // 7. Render Success
     renderWithLayout(res, 'campanhaProspeccao', {
       name: req.user.name,
       activePage: 'prospeccao',
@@ -384,54 +360,43 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
       leadsCount: leadsFiltrados.length,
       downloadUrl: `/downloads/${filename}`
     });
-
   } catch (err) {
-    console.error('Erro na API da Azure:', err);
+    console.error('Erro na API de Prospecção:', err);
     renderWithLayout(res, 'campanhaProspeccao', {
       name: req.user.name,
       activePage: 'prospeccao',
-      error: 'Problema de conexão com a API de Mapas. Verifique a chave ou o status do serviço.'
+      error: 'Problema de conexão com o serviço de mapas.'
     });
   }
 });
 
-// API — Recent campaigns (JSON, for polling)
+// JSON API — Recent campaigns (for dashboard polling)
 app.get('/api/campanhas', isAuthenticated, (req, res) => {
   const sql = "SELECT * FROM campanhas ORDER BY Inicio DESC LIMIT 10";
   db.query(sql, (err, result) => {
-    if (err) {
-      console.error('Erro ao buscar campanhas (API DB):', err);
-      return res.status(500).json({ error: 'Erro interno ao buscar campanhas' });
-    }
+    if (err) return res.status(500).json({ error: 'Erro ao buscar campanhas' });
     res.json(result);
   });
 });
 
-// API — Cities by state
+// JSON API — List cities by state
 app.get('/api/cidades/:estado', isAuthenticated, (req, res) => {
   const estado = req.params.estado.toUpperCase();
-
   db.query('SELECT DISTINCT cidade FROM listadecidades WHERE estado = ?', [estado], (err, results) => {
-    if (err) {
-      console.error('Erro ao buscar cidades (API DB):', err);
-      return res.status(500).json({ error: 'Erro interno ao buscar cidades' });
-    }
+    if (err) return res.status(500).json({ error: 'Erro ao buscar cidades' });
     res.json(results.map(r => r.cidade));
   });
 });
 
-
 // =============================================
-//  AUTH ROUTES
+//  AUTHENTICATION ROUTES
 // =============================================
 
-// Login page
 app.get('/login', (req, res) => {
-  console.log('Acesso à página Login');
+  if (req.isAuthenticated()) return res.redirect('/');
   res.render('login');
 });
 
-// Login POST
 app.post('/login', authLimiter, (req, res, next) => {
   passport.authenticate('local', (err, user, info) => {
     if (err) return next(err);
@@ -441,79 +406,24 @@ app.post('/login', authLimiter, (req, res, next) => {
       if (err) return next(err);
 
       const { remember } = req.body;
-      if (remember) {
-        req.session.cookie.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
-      } else {
-        req.session.cookie.expires = false;
-      }
+      req.session.cookie.maxAge = remember ? 7 * 24 * 60 * 60 * 1000 : null;
+      if (!remember) req.session.cookie.expires = false;
 
-      console.log(`Usuário ${user.name} logado com sucesso via Passport!`);
+      console.log(`Usuário ${user.name} logado via Passport.`);
       return res.redirect('/');
     });
   })(req, res, next);
 });
 
-// Logout
 app.get('/logout', (req, res, next) => {
-  console.log('Logout');
   req.logout((err) => {
     if (err) return next(err);
     res.redirect('/login');
   });
 });
 
-
 // =============================================
-//  CAMPAIGN CONTROL (MySQL only — no N8N)
+//  SERVER START
 // =============================================
-
-// Stop all active/paused campaigns
-app.post('/stopcampaign', isAuthenticated, (req, res) => {
-  db.query('UPDATE campanhas SET emAndamento = 0 WHERE emAndamento IN (1, 2)', (err, result) => {
-    if (err) {
-      console.error('Erro ao parar campanhas (DB):', err);
-      return res.status(500).send('Erro interno do servidor.');
-    }
-    if (result.affectedRows === 0) {
-      return res.send('Não há campanhas ativas ou pausadas no momento.');
-    }
-    console.log('Comando de parada executado');
-    res.send('Comando de parada enviado com sucesso! Aguarde o encerramento.');
-  });
-});
-
-// Pause active campaigns
-app.post('/pausecampaign', isAuthenticated, (req, res) => {
-  db.query('UPDATE campanhas SET emAndamento = 2 WHERE emAndamento = 1', (err, result) => {
-    if (err) {
-      console.error('Erro ao pausar campanhas:', err.message);
-      return res.status(500).send('Erro no banco de dados.');
-    }
-    if (result.affectedRows === 0) {
-      return res.send('Não há campanhas ativas para pausar.');
-    }
-    console.log('Comando de pausa executado');
-    res.send('Campanhas pausadas com sucesso!');
-  });
-});
-
-// Resume paused campaigns
-app.post('/resumecampaign', isAuthenticated, (req, res) => {
-  db.query('UPDATE campanhas SET emAndamento = 1 WHERE emAndamento = 2', (err, result) => {
-    if (err) {
-      console.error('Erro ao retomar campanhas:', err.message);
-      return res.status(500).send('Erro no banco de dados.');
-    }
-    if (result.affectedRows === 0) {
-      return res.send('Não há campanhas pausadas para retomar.');
-    }
-    console.log('Comando de retomada executado');
-    res.send('Campanhas retomadas com sucesso!');
-  });
-});
-
-
-// =============================================
-//  START SERVER
-// =============================================
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
