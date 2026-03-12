@@ -1,5 +1,7 @@
 const express = require('express');
 const app = express();
+const passport = require('passport');
+const LocalStrategy = require('passport-local').Strategy;
 app.set('trust proxy', 1);
 const path = require('path');
 const fs = require('fs');
@@ -90,6 +92,35 @@ app.use(session({
   }
 }));
 
+// Passport Config
+passport.use(new LocalStrategy({
+  usernameField: 'email',
+  passwordField: 'password'
+},
+  (email, password, done) => {
+    db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
+      if (err) return done(err);
+      if (results.length === 0) return done(null, false, { message: 'Usuário não encontrado.' });
+
+      const user = results[0];
+      const match = await bcrypt.compare(password, user.password);
+      if (match) return done(null, user);
+      return done(null, false, { message: 'Senha incorreta.' });
+    });
+  }
+));
+
+passport.serializeUser((user, done) => done(null, user.id));
+passport.deserializeUser((id, done) => {
+  db.query('SELECT * FROM ai_dashboard_users WHERE id = ?', [id], (err, results) => {
+    if (results.length === 0) return done(null, false);
+    done(err, results[0]);
+  });
+});
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Password encryption
 const bcrypt = require('bcryptjs');
 
@@ -115,7 +146,7 @@ function renderWithLayout(res, view, data = {}) {
 
 // Auth middleware
 function isAuthenticated(req, res, next) {
-  if (req.session && req.session.userId != null) {
+  if (req.isAuthenticated()) {
     return next();
   }
   res.redirect('/login');
@@ -201,7 +232,7 @@ app.get('/', isAuthenticated, (req, res) => {
       console.log('Acesso à página Home');
 
       renderWithLayout(res, 'home', {
-        name: req.session.userName,
+        name: req.user.name,
         campanhas: campanhasAtivas,
         dadosGrafico: JSON.stringify(dadosGrafico),
         arquivosParaDownload,
@@ -215,7 +246,7 @@ app.get('/', isAuthenticated, (req, res) => {
 app.get('/faq', isAuthenticated, (req, res) => {
   console.log('Acesso à página FAQ');
   renderWithLayout(res, 'faq', {
-    name: req.session.userName,
+    name: req.user.name,
     activePage: 'faq'
   });
 });
@@ -233,7 +264,7 @@ app.get('/history', isAuthenticated, (req, res) => {
     console.log('Acesso à página History - encontrou ' + campanhasFinalizadas.length + ' campanhas');
 
     renderWithLayout(res, 'history', {
-      name: req.session.userName,
+      name: req.user.name,
       campanhas: campanhasFinalizadas,
       activePage: 'history'
     });
@@ -244,7 +275,7 @@ app.get('/history', isAuthenticated, (req, res) => {
 app.get('/campanhaProspeccao', isAuthenticated, (req, res) => {
   console.log('Acesso à página Prospecção');
   renderWithLayout(res, 'campanhaProspeccao', {
-    name: req.session.userName,
+    name: req.user.name,
     activePage: 'prospeccao'
   });
 });
@@ -257,7 +288,7 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
   if (!apiKey) {
     console.error('AZURE_MAPS_KEY não configurada no .env');
     return renderWithLayout(res, 'campanhaProspeccao', {
-      name: req.session.userName, activePage: 'prospeccao',
+      name: req.user.name, activePage: 'prospeccao',
       error: 'Chave de API do Azure não configurada no servidor.'
     });
   }
@@ -270,7 +301,7 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
     const addressResponse = await axios.get(addressUrl);
     if (!addressResponse.data.results || addressResponse.data.results.length === 0) {
       return renderWithLayout(res, 'campanhaProspeccao', {
-        name: req.session.userName, activePage: 'prospeccao',
+        name: req.user.name, activePage: 'prospeccao',
         error: `Não foi possível encontrar a cidade: ${cidade} - ${estado}`
       });
     }
@@ -295,7 +326,7 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
 
     if (leadsFiltrados.length === 0) {
       return renderWithLayout(res, 'campanhaProspeccao', {
-        name: req.session.userName, activePage: 'prospeccao',
+        name: req.user.name, activePage: 'prospeccao',
         error: `A busca não encontrou nenhuma empresa do tipo "${tipoEmpresa}" em ${cidade} - ${estado}.`
       });
     }
@@ -344,7 +375,7 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
 
     // 7. Render Success
     renderWithLayout(res, 'campanhaProspeccao', {
-      name: req.session.userName,
+      name: req.user.name,
       activePage: 'prospeccao',
       success: true,
       tipoEmpresa,
@@ -357,7 +388,7 @@ app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res
   } catch (err) {
     console.error('Erro na API da Azure:', err);
     renderWithLayout(res, 'campanhaProspeccao', {
-      name: req.session.userName,
+      name: req.user.name,
       activePage: 'prospeccao',
       error: 'Problema de conexão com a API de Mapas. Verifique a chave ou o status do serviço.'
     });
@@ -401,47 +432,32 @@ app.get('/login', (req, res) => {
 });
 
 // Login POST
-app.post('/login', authLimiter, (req, res) => {
-  const { email, password, remember } = req.body;
+app.post('/login', authLimiter, (req, res, next) => {
+  passport.authenticate('local', (err, user, info) => {
+    if (err) return next(err);
+    if (!user) return res.send(info.message || 'Erro no login.');
 
-  db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
-    if (err) {
-      console.error('Erro no banco de dados (Login):', err);
-      return res.status(500).send('Erro interno do servidor.');
-    }
+    req.logIn(user, (err) => {
+      if (err) return next(err);
 
-    if (results.length === 0) {
-      return res.send('Usuário não encontrado.');
-    }
-
-    const user = results[0];
-    const match = await bcrypt.compare(password, user.password);
-
-    if (match) {
-      req.session.userId = user.id;
-      req.session.userName = user.name;
-
+      const { remember } = req.body;
       if (remember) {
         req.session.cookie.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
       } else {
         req.session.cookie.expires = false;
       }
 
-      req.session.save(() => {
-        res.redirect('/');
-      });
-
-      console.log(`Usuário ${user.name} logado com sucesso!`);
-    } else {
-      res.send('Senha incorreta.');
-    }
-  });
+      console.log(`Usuário ${user.name} logado com sucesso via Passport!`);
+      return res.redirect('/');
+    });
+  })(req, res, next);
 });
 
 // Logout
-app.get('/logout', (req, res) => {
+app.get('/logout', (req, res, next) => {
   console.log('Logout');
-  req.session.destroy(() => {
+  req.logout((err) => {
+    if (err) return next(err);
     res.redirect('/login');
   });
 });
