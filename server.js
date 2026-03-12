@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const ExcelJS = require('exceljs');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 // Create MySQL connection pool
@@ -47,6 +48,34 @@ app.use(express.json());
 
 // Static files — served before routes
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Rate Limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 100, // Limit each IP to 100 requests per `window`
+  standardHeaders: 'draft-7', // set `RateLimit` and `RateLimit-Policy` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: 'Muitas requisições deste IP, tente novamente em 15 minutos.'
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 5, // Limit each IP to 5 login attempts per window
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Muitas tentativas de login, tente novamente em 15 minutos.'
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  limit: 10, // Limit each IP to 10 prospectings per hour
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: 'Você atingiu o limite de prospecções por hora. Tente novamente mais tarde.'
+});
+
+// Apply general limiter to all requests
+app.use(generalLimiter);
 
 // Session management
 const session = require('express-session');
@@ -221,7 +250,7 @@ app.get('/campanhaProspeccao', isAuthenticated, (req, res) => {
 });
 
 // Prospecção POST (Azure Maps Integration)
-app.post('/api/iniciar-prospeccao', isAuthenticated, async (req, res) => {
+app.post('/api/iniciar-prospeccao', isAuthenticated, apiLimiter, async (req, res) => {
   const { tipoEmpresa, estado, cidade } = req.body;
   const apiKey = process.env.AZURE_MAPS_KEY;
 
@@ -372,7 +401,7 @@ app.get('/login', (req, res) => {
 });
 
 // Login POST
-app.post('/login', (req, res) => {
+app.post('/login', authLimiter, (req, res) => {
   const { email, password, remember } = req.body;
 
   db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {

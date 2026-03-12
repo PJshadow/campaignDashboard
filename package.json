@@ -17,6 +17,7 @@
     "ejs": "^3.1.10",
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.3.1",
     "express-session": "^1.18.2",
     "mysql2": "^3.15.0"
   },
