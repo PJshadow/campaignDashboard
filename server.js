@@ -163,13 +163,13 @@ app.get('/', isAuthenticated, (req, res) => {
 
   db.query(sqlAtivas, (err, campanhasAtivas) => {
     if (err) {
-      console.error('Erro ao buscar campanhas ativas:', err.message);
+      console.error('Erro ao buscar campanhas ativas (DB):', err);
       return res.status(500).send('Erro ao carregar o painel.');
     }
 
     db.query(sqlGrafico, (err2, campanhasParaGrafico) => {
       if (err2) {
-        console.error('Erro ao buscar dados do gráfico:', err2.message);
+        console.error('Erro ao buscar dados do gráfico (DB):', err2);
         return res.status(500).send('Erro ao carregar o painel.');
       }
 
@@ -226,8 +226,8 @@ app.get('/history', isAuthenticated, (req, res) => {
 
   db.query(sql, (err, campanhasFinalizadas) => {
     if (err) {
-      console.error('Erro ao buscar histórico:', err.message);
-      return res.status(500).send('Erro ao carregar o histórico: ' + err.message);
+      console.error('Erro ao buscar histórico (DB):', err);
+      return res.status(500).send('Erro interno ao carregar o histórico.');
     }
 
     console.log('Acesso à página History - encontrou ' + campanhasFinalizadas.length + ' campanhas');
@@ -369,8 +369,8 @@ app.get('/api/campanhas', isAuthenticated, (req, res) => {
   const sql = "SELECT * FROM campanhas ORDER BY Inicio DESC LIMIT 10";
   db.query(sql, (err, result) => {
     if (err) {
-      console.error('Erro ao buscar campanhas:', err.message);
-      return res.status(500).json({ error: 'Erro ao buscar campanhas' });
+      console.error('Erro ao buscar campanhas (API DB):', err);
+      return res.status(500).json({ error: 'Erro interno ao buscar campanhas' });
     }
     res.json(result);
   });
@@ -382,8 +382,8 @@ app.get('/api/cidades/:estado', isAuthenticated, (req, res) => {
 
   db.query('SELECT DISTINCT cidade FROM listadecidades WHERE estado = ?', [estado], (err, results) => {
     if (err) {
-      console.error('Erro ao buscar cidades:', err.message);
-      return res.status(500).json({ error: 'Erro ao buscar cidades' });
+      console.error('Erro ao buscar cidades (API DB):', err);
+      return res.status(500).json({ error: 'Erro interno ao buscar cidades' });
     }
     res.json(results.map(r => r.cidade));
   });
@@ -406,8 +406,8 @@ app.post('/login', authLimiter, (req, res) => {
 
   db.query('SELECT * FROM ai_dashboard_users WHERE email = ?', [email], async (err, results) => {
     if (err) {
-      console.error('Erro no banco de dados:', err.message);
-      return res.status(500).send('Erro no banco de dados.');
+      console.error('Erro no banco de dados (Login):', err);
+      return res.status(500).send('Erro interno do servidor.');
     }
 
     if (results.length === 0) {
@@ -455,8 +455,8 @@ app.get('/logout', (req, res) => {
 app.post('/stopcampaign', isAuthenticated, (req, res) => {
   db.query('UPDATE campanhas SET emAndamento = 0 WHERE emAndamento IN (1, 2)', (err, result) => {
     if (err) {
-      console.error('Erro ao parar campanhas:', err.message);
-      return res.status(500).send('Erro no banco de dados.');
+      console.error('Erro ao parar campanhas (DB):', err);
+      return res.status(500).send('Erro interno do servidor.');
     }
     if (result.affectedRows === 0) {
       return res.send('Não há campanhas ativas ou pausadas no momento.');
